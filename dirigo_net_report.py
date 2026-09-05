@@ -23,6 +23,9 @@ DEFAULT_STATE_TGS = {
     '3150': 'Vermont',
     '3133': 'New Hampshire',
     '3125': 'Massachusetts',
+    '3109': 'Connecticut',
+    '3144': 'Rhode Island',
+    '3136': 'New York'
 }
 STATE_TGS = json.loads(os.environ.get('DIRIGO_STATE_TGS', json.dumps(DEFAULT_STATE_TGS)))
 
