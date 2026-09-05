@@ -193,9 +193,9 @@ def build_report():
             return f"{n}th"
         return {1:"1st",2:"2nd",3:"3rd"}.get(n%10, f"{n}th")
     
-    # Use the most common ending date across reports for the intro
+    # Use the most recent ending date across all reports for the intro
     end_dates = [info.get('end') for info in page_info.values() if info.get('end')]
-    week_ending = end_dates[0] if end_dates else last_saturday_str
+    week_ending = max(end_dates) if end_dates else last_saturday_str
     
     md = f"# ME Statistics\nThese statistics are relevant to week ending {week_ending}\n\n"
     
