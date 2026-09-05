@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Dirigo Net weekly stats reporter.
 Pulls NEDECN reports and posts to Slack webhook.
-Retries at 9:00, 9:30, 9:45, 10:00, 10:30 AM EDT (13:00, 13:30, 13:45, 14:00, 14:30 UTC).
+Retries at configured check times until all reports are current or checks are exhausted.
 Posts partial results if one or two reports aren't ready.
+
+Set DIRIGO_CHECK_TIMES to override retry times (seconds since midnight UTC).
+Default: 13:00, 13:30, 13:45, 14:00, 14:55 UTC (9:00, 9:30, 9:45, 10:00, 10:55 AM EDT)
 """
 import json, os, sys, time, urllib.request, urllib.parse, re, xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
@@ -23,8 +26,12 @@ DEFAULT_STATE_TGS = {
 }
 STATE_TGS = json.loads(os.environ.get('DIRIGO_STATE_TGS', json.dumps(DEFAULT_STATE_TGS)))
 
-# Check times in UTC (9:00, 9:30, 9:45, 10:00, 10:30 AM EDT)
-CHECK_TIMES = [13*3600, 13*3600+30*60, 13*3600+45*60, 13*3600+50*60, 13*3600+55*60]  # seconds since midnight UTC (9:00, 9:30, 9:45, 9:50, 9:55 AM EDT)
+# Check times in UTC seconds since midnight.
+# Override with DIRIGO_CHECK_TIMES as a JSON list, e.g.:
+#   export DIRIGO_CHECK_TIMES='[46800, 47100, 47400]'
+# Default: 9:00, 9:30, 9:45, 10:00, 10:55 AM EDT (13:00, 13:30, 13:45, 14:00, 14:55 UTC)
+DEFAULT_CHECK_TIMES = [13*3600, 13*3600+30*60, 13*3600+45*60, 14*3600, 14*3600+55*60]
+CHECK_TIMES = json.loads(os.environ.get('DIRIGO_CHECK_TIMES', json.dumps(DEFAULT_CHECK_TIMES)))
 REPORT_URLS = {
     'callsign': 'https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-CALLSIGN.html',
     'talkgroup': 'https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-TALKGROUP.html',
