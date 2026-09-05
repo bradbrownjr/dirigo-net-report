@@ -225,8 +225,11 @@ def build_report():
                 '3150': 'Vermont',
                 '3133': 'New Hampshire',
                 '3125': 'Massachusetts',
-                '3124': 'Maryland',
-                # Add others as needed
+                # '3124': 'Maryland',  # removed — not a NEDECN repeater state
+                # Add CT, RI, NY state IDs here if/when they appear in reports
+                # 'XXXX': 'Connecticut',
+                # 'XXXX': 'Rhode Island',
+                # 'XXXX': 'New York',
             }
             tg_seconds = {}
             tg_rows = re.findall(r'<tr[^>]*>.*?</tr>', tg_text, re.DOTALL)
