@@ -88,9 +88,11 @@ def build_report():
     
     # Extract dates per page
     page_info = {}
+    # Determine last Saturday's date for "current week" comparison
     today = now_utc().date()
-    days_since_saturday = (today.weekday() + 2) % 7  # Saturday=5; gives 0 on Saturday, else days since
-    last_saturday = today - __import__('datetime').timedelta(days=days_since_saturday if days_since_saturday else 7)
+    weekday = today.weekday()  # 0=Mon, ..., 5=Sat, 6=Sun
+    days_since_sat = (weekday - 5) % 7  # 0 on Sat, 1 on Sun, 6 on Mon
+    last_saturday = today - __import__('datetime').timedelta(days=days_since_sat)
     last_saturday_str = last_saturday.strftime('%Y-%m-%d')
     
     for key, text in pages.items():
