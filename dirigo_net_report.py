@@ -12,6 +12,17 @@ if not WEBHOOK:
     print("Missing DIRIGO_SLACK_WEBHOOK env var")
     sys.exit(1)
 
+# State talkgroups to include in the ratio comparison.
+# Override by setting DIRIGO_STATE_TGS as a JSON string in the environment:
+#   export DIRIGO_STATE_TGS='{"3123":"Maine","3150":"Vermont","3133":"New Hampshire","3125":"Massachusetts"}'
+DEFAULT_STATE_TGS = {
+    '3123': 'Maine',
+    '3150': 'Vermont',
+    '3133': 'New Hampshire',
+    '3125': 'Massachusetts',
+}
+STATE_TGS = json.loads(os.environ.get('DIRIGO_STATE_TGS', json.dumps(DEFAULT_STATE_TGS)))
+
 # Check times in UTC (9:00, 9:30, 9:45, 10:00, 10:30 AM EDT)
 CHECK_TIMES = [13*3600, 13*3600+30*60, 13*3600+45*60, 13*3600+50*60, 13*3600+55*60]  # seconds since midnight UTC (9:00, 9:30, 9:45, 9:50, 9:55 AM EDT)
 REPORT_URLS = {
@@ -220,17 +231,7 @@ def build_report():
             next_state_secs = 0
             next_state_name = ""
             # State talkgroups to consider (excluding TAC and non-state)
-            state_tgs = {
-                '3123': 'Maine',
-                '3150': 'Vermont',
-                '3133': 'New Hampshire',
-                '3125': 'Massachusetts',
-                # '3124': 'Maryland',  # removed — not a NEDECN repeater state
-                # Add CT, RI, NY state IDs here if/when they appear in reports
-                # 'XXXX': 'Connecticut',
-                # 'XXXX': 'Rhode Island',
-                # 'XXXX': 'New York',
-            }
+            # Defaults to ME/VT/NH/MA; override with DIRIGO_STATE_TGS env var
             tg_seconds = {}
             tg_rows = re.findall(r'<tr[^>]*>.*?</tr>', tg_text, re.DOTALL)
             for row in tg_rows:
@@ -240,8 +241,8 @@ def build_report():
                     try:
                         tg_id = tds[1]
                         secs = int(tds[3]) if tds[3].isdigit() else 0
-                        if tg_id in state_tgs:
-                            tg_seconds[state_tgs[tg_id]] = secs
+                        if tg_id in STATE_TGS:
+                            tg_seconds[STATE_TGS[tg_id]] = secs
                     except:
                         pass
             
