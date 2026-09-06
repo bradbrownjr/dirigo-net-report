@@ -4,16 +4,24 @@ Pulls NEDECN reports and posts to Slack webhook.
 Retries at configured check times until all reports are current or checks are exhausted.
 Posts partial results if one or two reports aren't ready.
 
-Set DIRIGO_CHECK_TIMES to override retry times (seconds since midnight UTC).
-Default: 13:00, 13:30, 13:45, 14:00, 14:55 UTC (9:00, 9:30, 9:45, 10:00, 10:55 AM EDT)
+Set DIRIGO_CHECK_TIMES to override retry times (seconds since midnight, America/New_York
+local time — DST-aware, so the same values apply year-round).
+Default: 9:00, 9:30, 9:45, 10:00, 10:55 AM Eastern time.
 """
 import json, os, sys, time, urllib.request, urllib.parse, re, xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 WEBHOOK = os.environ.get('DIRIGO_SLACK_WEBHOOK','')
 if not WEBHOOK:
     print("Missing DIRIGO_SLACK_WEBHOOK env var")
     sys.exit(1)
+
+LOCAL_TZ = ZoneInfo('America/New_York')
+
+QRZ_CONFIGURED = bool(os.environ.get('QRZ_USERNAME')) and bool(os.environ.get('QRZ_APIKEY'))
+if not QRZ_CONFIGURED:
+    print("Warning: QRZ_USERNAME/QRZ_APIKEY not set — Callsign Report will be marked unavailable", file=sys.stderr)
 
 # State talkgroups to include in the ratio comparison.
 # Override by setting DIRIGO_STATE_TGS as a JSON string in the environment:
@@ -29,11 +37,11 @@ DEFAULT_STATE_TGS = {
 }
 STATE_TGS = json.loads(os.environ.get('DIRIGO_STATE_TGS', json.dumps(DEFAULT_STATE_TGS)))
 
-# Check times in UTC seconds since midnight.
+# Check times in seconds since midnight, America/New_York local time (DST-aware).
 # Override with DIRIGO_CHECK_TIMES as a JSON list, e.g.:
-#   export DIRIGO_CHECK_TIMES='[46800, 47100, 47400]'
-# Default: 9:00, 9:30, 9:45, 10:00, 10:55 AM EDT (13:00, 13:30, 13:45, 14:00, 14:55 UTC)
-DEFAULT_CHECK_TIMES = [13*3600, 13*3600+30*60, 13*3600+45*60, 14*3600, 14*3600+55*60]
+#   export DIRIGO_CHECK_TIMES='[32400, 34200, 34500]'
+# Default: 9:00, 9:30, 9:45, 10:00, 10:55 AM Eastern time
+DEFAULT_CHECK_TIMES = [9*3600, 9*3600+30*60, 9*3600+45*60, 10*3600, 10*3600+55*60]
 CHECK_TIMES = json.loads(os.environ.get('DIRIGO_CHECK_TIMES', json.dumps(DEFAULT_CHECK_TIMES)))
 REPORT_URLS = {
     'callsign': 'https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-CALLSIGN.html',
@@ -41,13 +49,30 @@ REPORT_URLS = {
     'repeater': 'https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-REPEATER.html',
 }
 
-def now_utc():
-    return datetime.now(timezone.utc)
+# NEDECN C-Bridge PeerWatch live-status feeds. Each line is one C-Bridge port:
+# <site label>\t<master-ID button>\t<repeater button (present only while a repeater is linked)>
+# A port with no third field means no repeater is currently linked on it (i.e. offline).
+PEERWATCH_URLS = {
+    'Augusta': 'http://207.246.80.187:42420/data.txt?param=ajaxpeerwatchpage',
+    'Bass Hill': 'http://45.76.4.145:42420/data.txt?param=ajaxpeerwatchpage',
+    'Boston': 'http://cb.nedecn.org:42420/data.txt?param=ajaxpeerwatchpage',
+}
+
+# Repeaters to flag as offline in the Repeater Report if their PeerWatch port has no
+# repeater linked. Override with DIRIGO_REPEATER_WATCHLIST as a JSON object mapping
+# a display name to a substring to match against the PeerWatch site label, e.g.:
+#   export DIRIGO_REPEATER_WATCHLIST='{"K1DQ Shapleigh":"Shapleigh","N1ME Holden":"Holden"}'
+DEFAULT_REPEATER_WATCHLIST = {
+    'K1DQ Shapleigh': 'Shapleigh',
+}
+REPEATER_WATCHLIST = json.loads(os.environ.get('DIRIGO_REPEATER_WATCHLIST', json.dumps(DEFAULT_REPEATER_WATCHLIST)))
+
+def now_local():
+    return datetime.now(LOCAL_TZ)
 
 def wait_until_next_check(now):
-    today_checks = [now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                    for _ in CHECK_TIMES]
-    today_checks = [t + __import__('datetime').timedelta(seconds=s) for t, s in zip(today_checks, CHECK_TIMES)]
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_checks = [midnight + timedelta(seconds=s) for s in CHECK_TIMES]
     future = [t for t in today_checks if t > now]
     if not future:
         return None  # all checks passed today
@@ -63,6 +88,35 @@ def extract_date_range(text):
     if m:
         return m.group(1), m.group(2)
     return None, None
+
+def check_repeater_statuses():
+    """Check the watched repeaters against the PeerWatch feeds.
+    Returns {display name: state}, where state is True (linked/online),
+    False (found but not linked/offline), or None (not found on any feed,
+    or no feed could be fetched at all -- status unknown rather than assumed)."""
+    statuses = {name: None for name in REPEATER_WATCHLIST}
+    if not REPEATER_WATCHLIST:
+        return statuses
+
+    pages = {}
+    for site, url in PEERWATCH_URLS.items():
+        try:
+            pages[site] = fetch_page(url)
+        except Exception as e:
+            print(f"Warning: failed to fetch PeerWatch feed for {site}: {e}", file=sys.stderr)
+
+    for name, match in REPEATER_WATCHLIST.items():
+        state = None  # None = not found anywhere, True = linked, False = found but unlinked
+        for text in pages.values():
+            for line in text.split('\n'):
+                fields = line.split('\t')
+                if fields and fields[0] and match.lower() in fields[0].lower():
+                    if len(fields) >= 3:
+                        state = True
+                    elif state is None:
+                        state = False
+        statuses[name] = state
+    return statuses
 
 def qrz_lookup(callsigns):
     """Look up state for a list of call signs using QRZ XML API."""
@@ -92,10 +146,10 @@ def qrz_lookup(callsigns):
                     state_el = c.find('{http://xmldata.qrz.com}state')
                     state = state_el.text.strip() if state_el is not None and state_el.text else ''
                     results[call] = {'state': state}
-            except:
+            except Exception:
                 results[call] = {}
         return results
-    except:
+    except Exception:
         return {}
 
 def build_report():
@@ -110,10 +164,10 @@ def build_report():
     # Extract dates per page
     page_info = {}
     # Determine last Saturday's date for "current week" comparison
-    today = now_utc().date()
+    today = now_local().date()
     weekday = today.weekday()  # 0=Mon, ..., 5=Sat, 6=Sun
     days_since_sat = (weekday - 5) % 7  # 0 on Sat, 1 on Sun, 6 on Mon
-    last_saturday = today - __import__('datetime').timedelta(days=days_since_sat)
+    last_saturday = today - timedelta(days=days_since_sat)
     last_saturday_str = last_saturday.strftime('%Y-%m-%d')
     
     for key, text in pages.items():
@@ -157,7 +211,7 @@ def build_report():
                         continue
                     call = tds[1]
                     top10_callsigns.append((rank, call))
-                except:
+                except Exception:
                     pass
         
         if top10_callsigns:
@@ -170,10 +224,8 @@ def build_report():
     
     # Parse talkgroup report
     maine_rank = None
-    above_tgs = []
     tg_info = page_info.get('talkgroup', {})
     tg_text = tg_info.get('text', '')
-    tg_end_date = tg_info.get('end', last_saturday_str)
     if tg_text:
         rows = re.findall(r'<tr[^>]*>.*?</tr>', tg_text, re.DOTALL)
         for row in rows:
@@ -185,9 +237,7 @@ def build_report():
                     tg_id = tds[1]
                     if tg_id == '3123':
                         maine_rank = rank
-                    elif maine_rank is None:
-                        above_tgs.append(tg_id)
-                except:
+                except Exception:
                     pass
     
     # Parse repeater report
@@ -207,15 +257,10 @@ def build_report():
                     location = tds[6]
                     if location == 'ME' or location.endswith(' ME'):
                         me_repeaters.append((tds[5], rank))
-                except:
+                except Exception:
                     pass
     
     # Build markdown
-    def ordinal(n):
-        if 11 <= n % 100 <= 13:
-            return f"{n}th"
-        return {1:"1st",2:"2nd",3:"3rd"}.get(n%10, f"{n}th")
-    
     # Use the most recent ending date across all reports for the intro
     end_dates = [info.get('end') for info in page_info.values() if info.get('end')]
     week_ending = max(end_dates) if end_dates else last_saturday_str
@@ -225,13 +270,15 @@ def build_report():
     cs_note = section_note('callsign')
     md += f"## Callsign Report{cs_note}\n[How many Maine hams in top ten](https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-CALLSIGN.html)\n"
     if cs_info.get('current'):
-        if me_callsigns:
+        if not QRZ_CONFIGURED:
+            md += "(QRZ lookup not configured — Maine operator count unavailable; set QRZ_USERNAME/QRZ_APIKEY)\n"
+        elif me_callsigns:
             md += f"{len(me_callsigns)} Maine operators in the Top 10\n"
         else:
             md += "(No Maine operators in top 10 this week)\n"
     else:
         md += "(Data not yet available for this week)\n"
-    
+
     tg_note = section_note('talkgroup')
     md += f"\n## Talkgroup Report{tg_note}\n[Maine Statewide talkgroup's usage ratio](https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-TALKGROUP.html)\n"
     if tg_info.get('current'):
@@ -240,8 +287,8 @@ def build_report():
             maine_secs = 0
             next_state_secs = 0
             next_state_name = ""
-            # State talkgroups to consider (excluding TAC and non-state)
-            # Defaults to ME/VT/NH/MA; override with DIRIGO_STATE_TGS env var
+            # State talkgroups to consider (excluding TAC and non-state);
+            # see DEFAULT_STATE_TGS / DIRIGO_STATE_TGS env var for the full list
             tg_seconds = {}
             tg_rows = re.findall(r'<tr[^>]*>.*?</tr>', tg_text, re.DOTALL)
             for row in tg_rows:
@@ -253,16 +300,16 @@ def build_report():
                         secs = int(tds[3]) if tds[3].isdigit() else 0
                         if tg_id in STATE_TGS:
                             tg_seconds[STATE_TGS[tg_id]] = secs
-                    except:
+                    except Exception:
                         pass
-            
+
             maine_secs = tg_seconds.get('Maine', 0)
             # Find next highest (excluding Maine)
             other_secs = {k: v for k, v in tg_seconds.items() if k != 'Maine' and v > 0}
             if other_secs:
                 next_state_name = max(other_secs, key=other_secs.get)
                 next_state_secs = other_secs[next_state_name]
-            
+
             if maine_secs > 0 and next_state_secs > 0:
                 ratio = maine_secs / next_state_secs
                 md += f"Maine Statewide is {ratio:.1f}x busier than the next statewide talk group, {next_state_name}\n"
@@ -274,7 +321,7 @@ def build_report():
             md += "(Maine Statewide talk group not found in top 10 this week)\n"
     else:
         md += "(Data not yet available for this week)\n"
-    
+
     rpt_note = section_note('repeater')
     md += f"\n## Repeater Report{rpt_note}\n[How many Maine repeaters in top ten](https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-REPEATER.html)\n"
     if rpt_info.get('current'):
@@ -284,7 +331,17 @@ def build_report():
             md += "(No Maine repeaters in top 10 this week)\n"
     else:
         md += "(Data not yet available for this week)\n"
-    
+
+    repeater_statuses = check_repeater_statuses()
+    offline_repeaters = [n for n, s in repeater_statuses.items() if s is False]
+    unknown_repeaters = [n for n, s in repeater_statuses.items() if s is None]
+    if offline_repeaters:
+        md += f"Offline: {', '.join(offline_repeaters)}\n"
+    elif repeater_statuses and not unknown_repeaters:
+        md += "All watched repeaters online\n"
+    if unknown_repeaters:
+        md += f"Could not verify: {', '.join(unknown_repeaters)}\n"
+
     all_current = all(page_info.get(k, {}).get('current', False) for k in REPORT_URLS)
     return md, all_current
 
@@ -296,8 +353,8 @@ def post_to_slack(md):
     return resp.status, resp.read().decode()
 
 def main():
-    print(f"Starting Dirigo Net report job at {now_utc().isoformat()}")
-    
+    print(f"Starting Dirigo Net report job at {now_local().isoformat()}")
+
     # Build the report right away (current data may already be live)
     report, all_current = build_report()
     if all_current:
@@ -306,18 +363,18 @@ def main():
         print("Initial build: some data not ready or incomplete. Entering retry window.")
         # Enter retry loop
         while True:
-            now = now_utc()
+            now = now_local()
             delay = wait_until_next_check(now)
             if delay is None:
                 print("All check windows passed. Posting best available report.")
                 break
-            print(f"Waiting {delay:.0f}s until next check at {(now + __import__('datetime').timedelta(seconds=delay)).isoformat()}")
+            print(f"Waiting {delay:.0f}s until next check at {(now + timedelta(seconds=delay)).isoformat()}")
             time.sleep(delay)
             report, all_current = build_report()
             if all_current:
                 print("Report ready. Posting.")
                 break
-            print(f"Check at {now_utc().isoformat()}: still not ready.")
+            print(f"Check at {now_local().isoformat()}: still not ready.")
     
     status, body = post_to_slack(report)
     print(f"Posted to Slack: {status} {body}")
