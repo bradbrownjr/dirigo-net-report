@@ -16,8 +16,8 @@ air without identifying individuals.
 
 ### 2. `exam_sessions_report.py` — ARRL Exam Sessions Report
 
-Scrapes the WSSM (Wireless Society of Southern Maine) website for upcoming
-ARRL VEC exam sessions and posts them to the same Slack webhook.
+Scrapes the ARRL's official exam session search page for upcoming VE exam
+sessions in Maine and New Hampshire, and posts them to the same Slack webhook.
 
 ### 3. `skywarn_training_check.py` — SKYWARN Training Session Watcher
 
@@ -176,7 +176,7 @@ exec /path/to/dirigo_net_report.py
 - Added `skywarn_training_check.py` — monitors NWS Gray SKYWARN training
   schedule for new upcoming sessions
 - Added `exam_sessions_report.py` to the repo (was previously only in
-  `.hermes/scripts`)
+  `.hermes/scripts`) — scrapes ARRL.org for ME/NH VE exam sessions
 
 ## License
 
