@@ -80,8 +80,9 @@ def wait_until_next_check(now):
     return delay
 
 def fetch_page(url):
-    req = urllib.request.urlopen(url, timeout=30)
-    return req.read().decode()
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'})
+    resp = urllib.request.urlopen(req, timeout=30)
+    return resp.read().decode()
 
 def extract_date_range(text):
     m = re.search(r'from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})', text)
@@ -124,7 +125,7 @@ def qrz_lookup(callsigns):
     passwd = os.environ.get('QRZ_APIKEY','')
     if not user or not passwd:
         return {}
-    
+
     base = "https://xmldata.qrz.com/xml/current/"
     url = f"{base}?username={urllib.parse.quote(user)};password={urllib.parse.quote(passwd)};agent=qrzpy1.0"
     try:
@@ -134,7 +135,7 @@ def qrz_lookup(callsigns):
         if key_el is None or not key_el.text:
             return {}
         skey = key_el.text
-        
+
         results = {}
         for call in callsigns:
             try:
@@ -160,7 +161,7 @@ def build_report():
         except Exception as e:
             pages[key] = None
             print(f"Warning: failed to fetch {key}: {e}", file=sys.stderr)
-    
+
     # Extract dates per page
     page_info = {}
     # Determine last Saturday's date for "current week" comparison
@@ -169,7 +170,7 @@ def build_report():
     days_since_sat = (weekday - 5) % 7  # 0 on Sat, 1 on Sun, 6 on Mon
     last_saturday = today - timedelta(days=days_since_sat)
     last_saturday_str = last_saturday.strftime('%Y-%m-%d')
-    
+
     for key, text in pages.items():
         if text:
             s, e = extract_date_range(text)
@@ -186,14 +187,14 @@ def build_report():
                 'end': None,
                 'current': False,
             }
-    
+
     def section_note(key):
         info = page_info.get(key, {})
         if not info.get('current'):
             date_str = f"{info.get('start','?')} to {info.get('end','?')}" if info.get('start') else "unknown"
             return f" (Report not current — {date_str})"
         return ""
-    
+
     # Parse callsign report
     me_callsigns = []
     cs_info = page_info.get('callsign', {})
@@ -213,7 +214,7 @@ def build_report():
                     top10_callsigns.append((rank, call))
                 except Exception:
                     pass
-        
+
         if top10_callsigns:
             me_call_list = [c[1] for c in top10_callsigns]
             qrz_results = qrz_lookup(me_call_list)
@@ -221,7 +222,7 @@ def build_report():
                 qrz = qrz_results.get(call, {})
                 if qrz.get('state') == 'ME':
                     me_callsigns.append((call, rank))
-    
+
     # Parse talkgroup report
     maine_rank = None
     tg_info = page_info.get('talkgroup', {})
@@ -239,7 +240,7 @@ def build_report():
                         maine_rank = rank
                 except Exception:
                     pass
-    
+
     # Parse repeater report
     me_repeaters = []
     rpt_info = page_info.get('repeater', {})
@@ -259,14 +260,14 @@ def build_report():
                         me_repeaters.append((tds[5], rank))
                 except Exception:
                     pass
-    
+
     # Build markdown
     # Use the most recent ending date across all reports for the intro
     end_dates = [info.get('end') for info in page_info.values() if info.get('end')]
     week_ending = max(end_dates) if end_dates else last_saturday_str
-    
+
     md = f"# ME Statistics\nThese statistics are relevant to week ending {week_ending}\n\n"
-    
+
     cs_note = section_note('callsign')
     md += f"## Callsign Report{cs_note}\n[How many Maine hams in top ten](https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-CALLSIGN.html)\n"
     if cs_info.get('current'):
@@ -338,7 +339,7 @@ def build_report():
     if offline_repeaters:
         md += f"Offline: {', '.join(offline_repeaters)}\n"
     elif repeater_statuses and not unknown_repeaters:
-        md += "All watched repeaters online\n"
+        md += "All Maine repeaters are online\n"
     if unknown_repeaters:
         md += f"Could not verify: {', '.join(unknown_repeaters)}\n"
 
@@ -375,7 +376,7 @@ def main():
                 print("Report ready. Posting.")
                 break
             print(f"Check at {now_local().isoformat()}: still not ready.")
-    
+
     status, body = post_to_slack(report)
     print(f"Posted to Slack: {status} {body}")
     print("=== REPORT ===")

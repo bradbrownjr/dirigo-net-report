@@ -68,7 +68,7 @@ Maine Statewide is <ratio>x busier than the next statewide talk group, Vermont
 ## Repeater Report
 [How many Maine repeaters in top ten](https://reports.nedecn.org/NEDECN/NEDECN-USE-BY-REPEATER.html)
 <count> Maine repeaters in the top 10
-Offline: <comma-separated watched repeater names> | All watched repeaters online
+Offline: <comma-separated watched repeater names> | All Maine repeaters are online
 Could not verify: <comma-separated watched repeater names, only if any are unverifiable>
 ```
 
