@@ -335,27 +335,35 @@ def main():
                 # If we can't determine, treat new sessions as worth reporting
                 new_upcoming.append(s)
 
-    if new_sessions:
-        print(f"Found {len(new_sessions)} new sessions (since last check)")
+    if new_upcoming:
+        # We have new upcoming sessions — post them to Slack
+        season_header = f" {season}" if season else ""
+        md = f"# SKYWARN Training Sessions - Newly Scheduled ({year}{season_header})\n\n"
+        md += f"Fetched from {URL} at {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+        for s in new_upcoming:
+            md += format_session_line(s, year) + "\n"
 
-        if new_upcoming:
-            # We have new sessions that are upcoming — post to Slack
-            season_header = f" {season}" if season else ""
-            md = f"# SKYWARN Training Sessions - Newly Scheduled ({year}{season_header})\n\n"
-            md += f"Fetched from {URL} at {now.strftime('%Y-%m-%d %H:%M')}\n\n"
-            for s in new_upcoming:
-                md += format_session_line(s, year) + "\n"
+        # Summary counts
+        md += f"\nTotal sessions currently listed: {len(sessions)} ({upcoming_count} upcoming, {past_count} past)"
 
-            # Summary counts
-            md += f"\nTotal sessions currently listed: {len(sessions)} ({upcoming_count} upcoming, {past_count} past)"
-
-            status, body = post_to_slack(md)
-            print(f"Posted to Slack: {status} {body}")
-        else:
-            # All new sessions are past — just log, no Slack notification
-            print("All new sessions are in the past — not posting to Slack")
+        status, body = post_to_slack(md)
+        print(f"Posted to Slack: {status} {body}")
     else:
-        print("No new sessions since last check")
+        # No new upcoming sessions — post a heartbeat status to Slack
+        season_header = f" {season}" if season else ""
+        if past_count == len(sessions) and upcoming_count == 0:
+            md = f"SKYWARN training check complete ({now.strftime('%Y-%m-%d %H:%M')}):\n"
+            md += f"{year}{season_header} — no upcoming training sessions (all {len(sessions)} listed sessions are past)."
+        elif upcoming_count > 0:
+            # Sessions exist and are upcoming, but none are new — still heartbeat
+            md = f"SKYWARN training check complete ({now.strftime('%Y-%m-%d %H:%M')}):\n"
+            md += f"{year}{season_header} — {upcoming_count} upcoming session(s) already reported, no new sessions."
+        else:
+            md = f"SKYWARN training check complete ({now.strftime('%Y-%m-%d %H:%M')}):\n"
+            md += f"{year}{season_header} — {len(sessions)} session(s) listed, {upcoming_count} upcoming, {past_count} past. No new sessions."
+
+        status, body = post_to_slack(md)
+        print(f"Heartbeat posted to Slack: {status} {body}")
 
     # Always save updated state
     save_seen(seen)
